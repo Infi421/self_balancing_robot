@@ -1,0 +1,90 @@
+const int pwmPin = 2;     // connect to P
+const int dirPin = 41;     // connect to DIR
+const int brakePin = 42;   // connect to STOP
+
+const int pwmChannel = 0;
+const int pwmFreq = 1000;
+const int pwmResolution = 8;
+
+int maxPWM = 110;
+int rampTime = 5000;   // 20 seconds
+
+void setup() {
+
+  pinMode(dirPin, OUTPUT);
+  pinMode(brakePin, OUTPUT);
+
+  digitalWrite(brakePin, HIGH); // release brake
+
+  // attach PWM
+  ledcAttach(pwmPin, pwmFreq, pwmResolution);
+
+}
+
+// void loop() {
+
+//   int stepDelay = rampTime / maxPWM;
+
+//   // -------- Forward --------
+//   digitalWrite(dirPin, HIGH);
+
+//   for(int pwm=0; pwm<=maxPWM; pwm++){
+//     ledcWrite(pwmPin, pwm);
+//     delay(stepDelay);
+//   }
+
+//   // -------- Brake --------
+//   ledcWrite(pwmPin, 0);
+//   digitalWrite(brakePin, LOW);
+//   delay(10000);
+
+//   digitalWrite(brakePin, HIGH);
+
+//   // -------- Reverse --------
+//   digitalWrite(dirPin, LOW);
+
+//   for(int pwm=0; pwm<=maxPWM; pwm++){
+//     ledcWrite(pwmPin, pwm);
+//     delay(stepDelay);
+//   }
+
+//   // -------- Ramp down --------
+//   for(int pwm=maxPWM; pwm>=0; pwm--){
+//     ledcWrite(pwmPin, pwm);
+//     delay(stepDelay);
+//   }
+
+// }
+
+
+void loop() {
+
+  int stepDelay = rampTime / maxPWM;
+  digitalWrite(dirPin, HIGH);
+
+  // Ramp up
+  for(int pwm = 0; pwm <= maxPWM; pwm++){
+    ledcWrite(pwmPin, pwm);
+    delay(stepDelay);
+  }
+  // Ramp down
+  for(int pwm = maxPWM; pwm >= 0; pwm--){
+    ledcWrite(pwmPin, pwm);
+    delay(stepDelay);
+  }
+
+  digitalWrite(dirPin, LOW);
+
+      // Ramp up
+  for(int pwm = 0; pwm <= maxPWM; pwm++){
+    ledcWrite(pwmPin, pwm);
+    delay(stepDelay);
+  }
+  // Ramp down
+  for(int pwm = maxPWM; pwm >= 0; pwm--){
+    ledcWrite(pwmPin, pwm);
+    delay(stepDelay);
+  }
+
+
+}
