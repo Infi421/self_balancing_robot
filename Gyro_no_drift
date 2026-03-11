@@ -19,133 +19,150 @@ float gyroBiasY = 0;
 float gyroBiasZ = 0;
 
 // ================= FILTER =================
-float ax_f=0, ay_f=0, az_f=0;
-float gx_f=0, gy_f=0, gz_f=0;
+float ax_f = 0, ay_f = 0, az_f = 0;
+float gx_f = 0, gy_f = 0, gz_f = 0;
 
 float alpha = 0.15;
 
 // ================= VALUES =================
-float roll=0, pitch=0, yaw=0;
-
+float roll = 0, pitch = 0, yaw = 0;
 
 // ================= NORMALIZE =================
-float normalize360(float angle){
-  angle = fmod(angle,360.0);
-  if(angle < 0) angle += 360.0;
+float normalize360(float angle) {
+  angle = fmod(angle, 360.0);
+  if (angle < 0) angle += 360.0;
   return angle;
 }
 
-
 // ================= CALIBRATION =================
-void calibrateGyro(){
-
+void calibrateGyro() {
   Serial.println("Calibrating Gyro...");
   delay(2000);
 
   int samples = 500;
+  long sumX = 0;
+  long sumY = 0;
+  long sumZ = 0;
+  int gx, gy, gz;
 
-  long sumX=0;
-  long sumY=0;
-  long sumZ=0;
-
-  int gx,gy,gz;
-
-  for(int i=0;i<samples;i++){
-
-    BMI160.readGyro(gx,gy,gz);
-
+  for (int i = 0; i < samples; i++) {
+    BMI160.readGyro(gx, gy, gz);
     sumX += gx;
     sumY += gy;
     sumZ += gz;
-
     delay(2);
   }
 
-  gyroBiasX = (float(sumX)/samples)/131.0;
-  gyroBiasY = (float(sumY)/samples)/131.0;
-  gyroBiasZ = (float(sumZ)/samples)/131.0;
+  gyroBiasX = (float(sumX) / samples) / 131.0;
+  gyroBiasY = (float(sumY) / samples) / 131.0;
+  gyroBiasZ = (float(sumZ) / samples) / 131.0;
 
   Serial.println("Gyro calibration done");
-
   Serial.print("BiasX: "); Serial.println(gyroBiasX);
   Serial.print("BiasY: "); Serial.println(gyroBiasY);
   Serial.print("BiasZ: "); Serial.println(gyroBiasZ);
 }
 
-
 // ================= SETUP =================
-void setup(){
-
+void setup() {
   Serial.begin(115200);
+  Wire.begin(SDA_PIN, SCL_PIN);
 
-  Wire.begin(SDA_PIN,SCL_PIN);
-
-  if(!BMI160.begin(BMI160GenClass::I2C_MODE,IMU_ADDR)){
+  if (!BMI160.begin(BMI160GenClass::I2C_MODE, IMU_ADDR)) {
     Serial.println("BMI160 not detected");
-    while(1);
+    while (1);
   }
 
   BMI160.setAccelerometerRate(UPDATE_HZ);
   BMI160.setGyroRate(UPDATE_HZ);
 
   calibrateGyro();
-
   filter.begin(UPDATE_HZ);
 
-  microsPerReading = 1000000/UPDATE_HZ;
+  // --- PRE-WARM THE FILTER ---
+  Serial.println("Stabilizing filter...");
+  
+  long sumAx = 0, sumAy = 0, sumAz = 0;
+  int accelSamples = 200;
+  int axRaw, ayRaw, azRaw;
+
+  // 1. Get a perfectly clean average accelerometer vector
+  for (int i = 0; i < accelSamples; i++) {
+    BMI160.readAccelerometer(axRaw, ayRaw, azRaw);
+    sumAx += axRaw;
+    sumAy += ayRaw;
+    sumAz += azRaw;
+    delay(2);
+  }
+
+  // Initialize the low-pass filter to the exact average
+  ax_f = (sumAx / (float)accelSamples) / 16384.0;
+  ay_f = (sumAy / (float)accelSamples) / 16384.0;
+  az_f = (sumAz / (float)accelSamples) / 16384.0;
+
+  // 2. Brute-force the Madgwick filter 25,000 times to guarantee mathematical convergence.
+  // We feed it 0.0 for gyro to prevent integrating static noise. 
+  // On an ESP32, this math takes less than 50 milliseconds.
+  for (int i = 0; i < 25000; i++) {
+    filter.updateIMU(0.0, 0.0, 0.0, ax_f, ay_f, az_f);
+  }
+  // ---------------------------
+
+  microsPerReading = 1000000 / UPDATE_HZ;
   microsPrevious = micros();
 
   Serial.println("IMU Ready");
 }
 
-
 // ================= LOOP =================
-void loop(){
-  int axRaw,ayRaw,azRaw;
-  int gxRaw,gyRaw,gzRaw;
+void loop() {
+  int axRaw, ayRaw, azRaw;
+  int gxRaw, gyRaw, gzRaw;
 
-  float ax,ay,az;
-  float gx,gy,gz;
+  float ax, ay, az;
+  float gx, gy, gz;
 
   unsigned long microsNow = micros();
 
-  if(microsNow - microsPrevious >= microsPerReading){
+  if (microsNow - microsPrevious >= microsPerReading) {
 
-    BMI160.readAccelerometer(axRaw,ayRaw,azRaw);
-    BMI160.readGyro(gxRaw,gyRaw,gzRaw);
+    BMI160.readAccelerometer(axRaw, ayRaw, azRaw);
+    BMI160.readGyro(gxRaw, gyRaw, gzRaw);
 
-    ax = axRaw/16384.0;
-    ay = ayRaw/16384.0;
-    az = azRaw/16384.0;
+    // Scale raw values
+    ax = axRaw / 16384.0;
+    ay = ayRaw / 16384.0;
+    az = azRaw / 16384.0;
 
-    gx = (gxRaw/131.0) - gyroBiasX;
-    gy = (gyRaw/131.0) - gyroBiasY;
-    gz = (gzRaw/131.0) - gyroBiasZ;
+    gx = (gxRaw / 131.0) - gyroBiasX;
+    gy = (gyRaw / 131.0) - gyroBiasY;
+    gz = (gzRaw / 131.0) - gyroBiasZ;
 
-    ax_f = alpha*ax + (1-alpha)*ax_f;
-    ay_f = alpha*ay + (1-alpha)*ay_f;
-    az_f = alpha*az + (1-alpha)*az_f;
+    // Apply Low-Pass Filter
+    ax_f = alpha * ax + (1 - alpha) * ax_f;
+    ay_f = alpha * ay + (1 - alpha) * ay_f;
+    az_f = alpha * az + (1 - alpha) * az_f;
 
-    gx_f = alpha*gx + (1-alpha)*gx_f;
-    gy_f = alpha*gy + (1-alpha)*gy_f;
-    gz_f = alpha*gz + (1-alpha)*gz_f;
+    gx_f = alpha * gx + (1 - alpha) * gx_f;
+    gy_f = alpha * gy + (1 - alpha) * gy_f;
+    gz_f = alpha * gz + (1 - alpha) * gz_f;
 
-    filter.updateIMU(gx_f,gy_f,gz_f,ax_f,ay_f,az_f);
+    // Update Madgwick
+    filter.updateIMU(gx_f, gy_f, gz_f, ax_f, ay_f, az_f);
 
+    // Get Angles
     roll  = normalize360(filter.getRoll());
     pitch = normalize360(filter.getPitch());
     yaw   = normalize360(filter.getYaw());
 
+    // Print
     Serial.print("Roll: ");
     Serial.print(roll);
-
     Serial.print(" Pitch: ");
     Serial.print(pitch);
-
     Serial.print(" Yaw: ");
     Serial.println(yaw);
 
     microsPrevious += microsPerReading;
   }
-
 }
