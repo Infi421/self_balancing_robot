@@ -13,11 +13,13 @@ const char* password = "12345678";
 
 WebServer server(80);
 
+String statusLog = "System Ready";
+
 
 /************************************************************
 ===================== MOTOR CONTROL =========================
-Two ZS-X11H Drivers
-PWM 1kHz, 45% max duty
+Two ZS-X11H drivers
+PWM 1kHz, 45% duty max
 ************************************************************/
 
 // LEFT MOTOR
@@ -32,7 +34,11 @@ const int brakePinR = 39;
 
 const int pwmFreq = 1000;
 const int pwmResolution = 8;
-const int maxPWM = 110;   // 45% duty limit
+
+const int maxPWM = 110;
+
+int lastLeftPWM = 0;
+int lastRightPWM = 0;
 
 void setMotors(float value)
 {
@@ -42,7 +48,7 @@ void setMotors(float value)
     pwm = maxPWM;
 
   if(pwm < 20)
-    pwm = 0;  // dead zone
+    pwm = 0;
 
   if(value > 0)
   {
@@ -57,6 +63,9 @@ void setMotors(float value)
 
   ledcWrite(pwmPinL, pwm);
   ledcWrite(pwmPinR, pwm);
+
+  lastLeftPWM = pwm;
+  lastRightPWM = pwm;
 }
 
 
@@ -83,7 +92,6 @@ float gyroBiasX = 0;
 float gyroBiasY = 0;
 float gyroBiasZ = 0;
 
-
 void calibrateGyro()
 {
   Serial.println("Calibrating gyro");
@@ -109,16 +117,14 @@ void calibrateGyro()
   Serial.println("Gyro calibrated");
 }
 
-
 void calibrateOrientation()
 {
   rollOffset  = filter.getRoll();
   pitchOffset = filter.getPitch();
   yawOffset   = filter.getYaw();
 
-  Serial.println("Roll zeroed");
+  Serial.println("Orientation zeroed");
 }
-
 
 
 /************************************************************
@@ -143,8 +149,8 @@ return R"rawliteral(
 
 <!DOCTYPE html>
 <html>
-<head>
 
+<head>
 <meta name="viewport" content="width=device-width, initial-scale=1">
 
 <style>
@@ -171,7 +177,7 @@ margin-bottom:15px;
 display:grid;
 grid-template-columns:1fr 1fr;
 gap:10px;
-max-width:500px;
+max-width:600px;
 margin:auto;
 }
 
@@ -185,6 +191,13 @@ border:1px solid #333;
 .val{
 font-size:1.8em;
 color:white;
+}
+
+#log{
+background:black;
+color:#0f0;
+padding:10px;
+margin-top:10px;
 }
 
 </style>
@@ -208,7 +221,24 @@ color:white;
 <span id="pitch" class="val">0</span>
 </div>
 
+<div class="card">
+<h2>YAW</h2>
+<span id="yaw" class="val">0</span>
 </div>
+
+<div class="card">
+<h2>LEFT MOTOR</h2>
+<span id="mL" class="val">0</span>
+</div>
+
+<div class="card">
+<h2>RIGHT MOTOR</h2>
+<span id="mR" class="val">0</span>
+</div>
+
+</div>
+
+<div id="log">Log</div>
 
 <script>
 
@@ -224,6 +254,12 @@ fetch('/data')
 
 document.getElementById('roll').innerText=d.roll;
 document.getElementById('pitch').innerText=d.pitch;
+document.getElementById('yaw').innerText=d.yaw;
+
+document.getElementById('mL').innerText=d.leftMotor;
+document.getElementById('mR').innerText=d.rightMotor;
+
+document.getElementById('log').innerText=d.log;
 
 });
 
@@ -275,7 +311,7 @@ WiFi.softAP(ssid,password);
 Serial.println(WiFi.softAPIP());
 
 
-/* IMU INIT */
+/* IMU */
 
 Wire.begin(SDA_PIN,SCL_PIN);
 
@@ -333,7 +369,11 @@ server.on("/data",[](){
 
 String json =
 "{\"roll\":"+String(roll,1)+
-",\"pitch\":"+String(pitch,1)+"}";
+",\"pitch\":"+String(pitch,1)+
+",\"yaw\":"+String(yaw,1)+
+",\"leftMotor\":"+String(lastLeftPWM)+
+",\"rightMotor\":"+String(lastRightPWM)+
+",\"log\":\""+statusLog+"\"}";
 
 server.send(200,"application/json",json);
 
@@ -341,7 +381,7 @@ server.send(200,"application/json",json);
 
 server.begin();
 
-microsPerReading = 5000;   // 200 Hz control
+microsPerReading = 5000;
 microsPrevious = micros();
 
 }
