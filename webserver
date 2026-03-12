@@ -1,0 +1,156 @@
+#include <WiFi.h>
+#include <WebServer.h>
+#include <Wire.h>
+#include <BMI160Gen.h>
+#include <MadgwickAHRS.h>
+
+const char* ssid = "ESP32_Robot_Monitor";
+const char* password = "12345678";
+
+WebServer server(80);
+Madgwick filter;
+
+// Pins
+#define SDA_PIN 11
+#define SCL_PIN 10
+#define IMU_ADDR 0x68
+#define MOTOR_L_PIN 36 
+#define MOTOR_R_PIN 39
+
+// Variables
+unsigned long microsPerReading;
+unsigned long microsPrevious;
+float roll = 0, pitch = 0, yaw = 0;
+int speedL = 0, speedR = 0;
+String statusLog = "System Started...";
+
+// Task Handle
+TaskHandle_t RobotTask;
+
+// Function Prototypes
+void core0Logic(void * pvParameters);
+String getHTML();
+void updateLog(String msg);
+
+void setup() {
+  Serial.begin(115200);
+
+  // Create the task that will run on Core 0
+  // Name: "RobotControl", Stack size: 10000, Priority: 1, Core: 0
+  xTaskCreatePinnedToCore(
+    core0Logic,   /* Task function. */
+    "RobotTask",  /* name of task. */
+    10000,        /* Stack size of task */
+    NULL,         /* parameter of the task */
+    1,            /* priority of the task */
+    &RobotTask,   /* Task handle to keep track of created task */
+    0);           /* pin task to core 0 */
+}
+
+// We leave loop() empty because everything is now in core0Logic
+void loop() {
+  vTaskDelete(NULL); // Deletes the default Loop task to free up Core 1 resources
+}
+
+// All your original logic goes here
+void core0Logic(void * pvParameters) {
+  updateLog("Starting Core 0...");
+
+  WiFi.softAP(ssid, password);
+  Wire.begin(SDA_PIN, SCL_PIN);
+
+  if (!BMI160.begin(BMI160GenClass::I2C_MODE, IMU_ADDR)) {
+    updateLog("IMU Error!");
+    while(1) vTaskDelay(10);
+  }
+  
+  BMI160.setAccelerometerRate(100);
+  BMI160.setGyroRate(100);
+  filter.begin(100);
+
+  server.on("/", []() { server.send(200, "text/html", getHTML()); });
+  server.on("/data", []() {
+    String json = "{\"roll\":" + String(roll, 1) + ",\"pitch\":" + String(pitch, 1) + 
+                  ",\"yaw\":" + String(yaw, 1) + ",\"speedL\":" + String(speedL) + 
+                  ",\"speedR\":" + String(speedR) + ",\"log\":\"" + statusLog + "\"}";
+    server.send(200, "application/json", json);
+  });
+  server.begin();
+  
+  microsPerReading = 10000;
+  microsPrevious = micros();
+
+  // Infinite loop for Core 0
+  for(;;) {
+    server.handleClient();
+
+    if (micros() - microsPrevious >= microsPerReading) {
+      int axR, ayR, azR, gxR, gyR, gzR;
+      BMI160.readAccelerometer(axR, ayR, azR);
+      BMI160.readGyro(gxR, gyR, gzR);
+
+      filter.updateIMU(gxR/131.0, gyR/131.0, gzR/131.0, axR/16384.0, ayR/16384.0, azR/16384.0);
+      
+      roll = filter.getRoll();
+      pitch = filter.getPitch();
+      yaw = filter.getYaw();
+
+      speedL = analogRead(MOTOR_L_PIN);
+      speedR = analogRead(MOTOR_R_PIN);
+
+      if(abs(pitch) > 30) updateLog("Warning: High Tilt!");
+      
+      microsPrevious += microsPerReading;
+    }
+    // Critical: Yield to the Watchdog Timer and Background WiFi tasks
+    vTaskDelay(1); 
+  }
+}
+
+void updateLog(String msg) {
+  Serial.println(msg);
+  statusLog = msg;
+}
+
+String getHTML() {
+  return R"rawliteral(
+  <!DOCTYPE html><html><head>
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <style>
+    body { font-family: sans-serif; text-align:center; background:#111; color:#00ffcc; margin:0; padding:20px; }
+    .grid { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; max-width: 500px; margin: auto; }
+    .card { background:#222; padding:15px; border-radius:10px; border:1px solid #333; }
+    .full { grid-column: 1 / span 2; }
+    .val { font-size: 1.8em; color: white; display:block; }
+    #console { background:black; color:#0f0; text-align:left; font-family:monospace; height:150px; overflow-y:scroll; padding:10px; font-size:0.8em; border:1px solid #444; }
+    h2 { font-size: 1em; color: #888; margin: 5px 0; }
+  </style>
+  </head><body>
+    <h1>Robot Dashboard</h1>
+    <div class="grid">
+      <div class="card"><h2>ROLL</h2><span id="roll" class="val">0</span></div>
+      <div class="card"><h2>PITCH</h2><span id="pitch" class="val">0</span></div>
+      <div class="card full"><h2>YAW</h2><span id="yaw" class="val">0</span></div>
+      <div class="card"><h2>LEFT MOTOR</h2><span id="mL" class="val">0</span></div>
+      <div class="card"><h2>RIGHT MOTOR</h2><span id="mR" class="val">0</span></div>
+      <div class="card full">
+        <h2>STATUS LOG</h2>
+        <div id="console"></div>
+      </div>
+    </div>
+    <script>
+      setInterval(function() {
+        fetch('/data').then(res => res.json()).then(d => {
+          document.getElementById('roll').innerText = d.roll;
+          document.getElementById('pitch').innerText = d.pitch;
+          document.getElementById('yaw').innerText = d.yaw;
+          document.getElementById('mL').innerText = d.speedL;
+          document.getElementById('mR').innerText = d.speedR;
+          let con = document.getElementById('console');
+          con.innerText = d.log;
+          con.scrollTop = con.scrollHeight;
+        });
+      }, 200);
+    </script>
+  </body></html>)rawliteral";
+}
