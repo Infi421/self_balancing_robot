@@ -1,0 +1,68 @@
+/************************************************************
+===================== PINS & VARIABLES ======================
+************************************************************/
+const int pwmPinL = 5; 
+const int dirPinL = 4;
+const int brakePinL = 3;
+
+const int pwmPinR = 6;
+const int dirPinR = 7;
+const int brakePinR = 8;
+
+const int maxPWM = 110;
+
+// Shared IMU Variables
+float roll = 0, pitch = 0, yaw = 0;
+
+/************************************************************
+===================== SETUP ================================
+************************************************************/
+void setup() {
+  // Speed MUST match ESP32 (115200)
+  Serial.begin(115200);
+  
+  // A tiny timeout prevents the code from hanging if data is late
+  Serial.setTimeout(5); 
+
+  pinMode(pwmPinL, OUTPUT);
+  pinMode(dirPinL, OUTPUT);
+  pinMode(brakePinL, OUTPUT);
+  pinMode(pwmPinR, OUTPUT);
+  pinMode(dirPinR, OUTPUT);
+  pinMode(brakePinR, OUTPUT);
+
+  digitalWrite(brakePinL, HIGH);
+  digitalWrite(brakePinR, HIGH);
+
+  // Print a header to the monitor
+  Serial.println("--- Arduino Ready: Awaiting Data ---");
+}
+
+/************************************************************
+===================== MAIN LOOP ============================
+************************************************************/
+void loop() {
+  
+  if (Serial.available() > 0) {
+    
+    // 1. Parse the incoming CSV: "roll,pitch,yaw\n"
+    roll  = Serial.parseFloat();
+    pitch = Serial.parseFloat();
+    yaw   = Serial.parseFloat();
+
+    // 2. Clear the buffer of the remaining newline character (\n)
+    while (Serial.available() > 0 && (Serial.peek() == '\n' || Serial.peek() == '\r' || Serial.peek() == ' ')) {
+      Serial.read(); 
+    }
+
+    // 3. ECHO TO SERIAL MONITOR
+    // This goes out through Pin 1 (TX) to your computer USB
+    Serial.print("R: "); Serial.print(roll);
+    Serial.print(" | P: "); Serial.print(pitch);
+    Serial.print(" | Y: "); Serial.println(yaw);
+
+    /* ===== PID & MOTOR LOGIC GOES HERE ===== */
+    // Note: If the serial monitor makes the robot lag, 
+    // remove the Serial.print lines above for final use.
+  }
+}
