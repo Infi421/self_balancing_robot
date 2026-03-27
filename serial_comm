@@ -1,0 +1,42 @@
+\\ ESP32
+
+void setup() {
+
+  Serial.begin(9600); 
+  
+  Serial.println("System Ready...");
+}
+
+void loop() {
+
+  Serial.println("Hello Arduino"); 
+  
+  delay(1500); 
+}
+
+
+
+\\ Arduino
+
+void setup() {
+  Serial.begin(9600); 
+  pinMode(13, OUTPUT); // ডাটা আসলে LED জ্বলার জন্য (অপশনাল)
+}
+
+void loop() {
+  // যদি ESP32 থেকে কোনো ডাটা আসে
+  if (Serial.available() > 0) {
+    
+    // ডাটা পড়া শুরু করো
+    String receivedData = Serial.readStringUntil('\n');
+    
+    // মনিটরে প্রিন্ট করো
+    Serial.print("ESP32 says: ");
+    Serial.println(receivedData);
+    
+    // ডাটা রিসিভ হলে ইনবিল্ট LED ১ সেকেন্ডের জন্য জ্বলবে
+    digitalWrite(13, HIGH);
+    delay(500);
+    digitalWrite(13, LOW);
+  }
+}
