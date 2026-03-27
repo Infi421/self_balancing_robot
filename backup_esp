@@ -4,18 +4,14 @@
 #include <BMI160Gen.h>
 #include <MadgwickAHRS.h>
 
-/************************************************************
-===================== WIFI / WEBSERVER ======================
-************************************************************/
+/**************** WIFI ****************/
 const char* ssid = "ESP32_Robot_Monitor";
 const char* password = "12345678";
 
 WebServer server(80);
 String statusLog = "System Ready";
 
-/************************************************************
-===================== IMU / GYRO ============================
-************************************************************/
+/**************** IMU ****************/
 Madgwick filter;
 
 #define SDA_PIN 25
@@ -26,164 +22,129 @@ float roll = 0, pitch = 0, yaw = 0;
 float rollOffset = 0, pitchOffset = 0, yawOffset = 0;
 float gyroBiasX = 0, gyroBiasY = 0, gyroBiasZ = 0;
 
-bool imu_ok = false; 
+bool imu_ok = false;
 
+/**************** TIMING ****************/
+unsigned long microsPrevious = 0;
+const unsigned long microsPerReading = 5000; // 5 ms = 200 Hz
+
+/**************** CALIBRATION ****************/
 void calibrateGyro() {
   statusLog = "Calibrating gyro...";
   long gx=0, gy=0, gz=0;
+
   for(int i=0; i<1000; i++) {
     int x,y,z;
     BMI160.readGyro(x,y,z);
     gx+=x; gy+=y; gz+=z;
     delay(2);
   }
+
   gyroBiasX = gx/1000.0;
   gyroBiasY = gy/1000.0;
   gyroBiasZ = gz/1000.0;
 }
 
 void calibrateOrientation() {
-  if(!imu_ok) return; 
+  if(!imu_ok) return;
+
   rollOffset  = filter.getRoll();
   pitchOffset = filter.getPitch();
   yawOffset   = filter.getYaw();
+
   statusLog = "System Ready (Zeroed)";
 }
 
-/************************************************************
-===================== WEB DASHBOARD =========================
-************************************************************/
+/**************** WEB ****************/
 String getHTML() {
 return R"rawliteral(
-<!DOCTYPE html>
-<html>
-<head>
-<meta name="viewport" content="width=device-width, initial-scale=1">
-<style>
-body{font-family:sans-serif;text-align:center;background:#111;color:#00ffcc;padding:20px;}
-button{padding:10px 20px;font-size:16px;background:#00ffcc;border:none;border-radius:6px;cursor:pointer;margin-bottom:15px;}
-.grid{display:grid;grid-template-columns:1fr;gap:10px;max-width:400px;margin:auto;}
-.card{background:#222;padding:15px;border-radius:10px;border:1px solid #333;}
-.val{font-size:1.8em;color:white;}
-#log{background:black;color:#0f0;padding:10px;margin-top:20px;max-width:400px;margin:auto;}
-</style>
-</head>
-<body>
-<h1>Robot Dashboard</h1>
-<button onclick="zeroIMU()">Re-Zero Roll</button>
-<div class="grid">
-<div class="card"><h2>ROLL</h2><span id="roll" class="val">0.0</span></div>
-<div class="card"><h2>PITCH</h2><span id="pitch" class="val">0.0</span></div>
-<div class="card"><h2>YAW</h2><span id="yaw" class="val">0.0</span></div>
-</div>
-<div id="log">Log</div>
+<!DOCTYPE html><html><body style="background:#111;color:#0f0;text-align:center;">
+<h2>Robot Dashboard</h2>
+<p>Roll: <span id="r">0</span></p>
+<p>Pitch: <span id="p">0</span></p>
+<p>Yaw: <span id="y">0</span></p>
 <script>
-function zeroIMU(){ fetch('/zero'); }
-setInterval(function(){
-fetch('/data').then(res=>res.json()).then(d=>{
-document.getElementById('roll').innerText=d.roll;
-document.getElementById('pitch').innerText=d.pitch;
-document.getElementById('yaw').innerText=d.yaw;
-document.getElementById('log').innerText=d.log;
+setInterval(()=>{
+fetch('/data').then(r=>r.json()).then(d=>{
+r.innerText=d.roll;
+p.innerText=d.pitch;
+y.innerText=d.yaw;
 });
-}, 50); 
+},100);
 </script>
-</body>
-</html>
+</body></html>
 )rawliteral";
 }
 
-/************************************************************
-===================== SETUP ================================
-************************************************************/
-unsigned long microsPrevious;
-const unsigned long microsPerReading = 5000; // 200Hz
-
+/**************** SETUP ****************/
 void setup() {
   Serial.begin(115200);
-  delay(1000);
 
-  /* WIFI AP */
   WiFi.mode(WIFI_AP);
   WiFi.softAP(ssid, password);
 
-  /* WEB ROUTES */
-  server.on("/",[](){ server.send(200,"text/html",getHTML()); });
-  server.on("/zero",[](){ calibrateOrientation(); server.send(200,"text/plain","zeroed"); });
-  server.on("/data",[](){
-    // Build JSON using snprintf (faster, less fragmentation)
-    char json[128];
-    snprintf(json, sizeof(json),
-      "{\"roll\":%.1f,\"pitch\":%.1f,\"yaw\":%.1f,\"log\":\"%s\"}",
-      roll, pitch, yaw, statusLog.c_str());
+  server.on("/", [](){ server.send(200,"text/html",getHTML()); });
+  server.on("/data", [](){
+    char json[100];
+    snprintf(json,sizeof(json),
+      "{\"roll\":%.2f,\"pitch\":%.2f,\"yaw\":%.2f}",
+      roll,pitch,yaw);
     server.send(200,"application/json",json);
   });
   server.begin();
 
-  /* IMU AUTO-DETECT */
   Wire.begin(SDA_PIN, SCL_PIN);
-  Wire.setClock(400000); // 400kHz Fast I2C
-  Wire.setTimeOut(100); 
+  Wire.setClock(400000);
 
-  Wire.beginTransmission(IMU_ADDR);
-  if (Wire.endTransmission() == 0) {
-    if(BMI160.begin(BMI160GenClass::I2C_MODE, IMU_ADDR)) {
-      imu_ok = true;
-      BMI160.setAccelerometerRate(100);
-      BMI160.setGyroRate(100);
-      calibrateGyro();
-      filter.begin(100);
-      calibrateOrientation();
-    }
-  } else {
-    statusLog = "IMU Missing - Web Only Mode";
+  if (BMI160.begin(BMI160GenClass::I2C_MODE, IMU_ADDR)) {
+    imu_ok = true;
+
+    BMI160.setAccelerometerRate(100);
+    BMI160.setGyroRate(100);
+
+    calibrateGyro();
+    filter.begin(200);   // match loop rate
+
+    delay(2000);         // stabilize
+    calibrateOrientation();
   }
 
   microsPrevious = micros();
 }
 
-/************************************************************
-===================== MAIN LOOP ============================
-************************************************************/
+/**************** LOOP ****************/
 void loop() {
-  // Handle web server traffic first
+
+  // always handle web
   server.handleClient();
 
-  // Run IMU and Serial logic at exactly 200 Hz
-  if(imu_ok && (micros() - microsPrevious >= microsPerReading)) {
-    // Advance timer by the period, not set to current time (avoids bursts)
+  // precise 200 Hz loop
+  if (imu_ok && (micros() - microsPrevious >= microsPerReading)) {
+
     microsPrevious += microsPerReading;
 
-    int axR, ayR, azR, gxR, gyR, gzR;
-    BMI160.readAccelerometer(axR, ayR, azR);
-    BMI160.readGyro(gxR, gyR, gzR);
+    int ax, ay, az, gx, gy, gz;
+    BMI160.readAccelerometer(ax, ay, az);
+    BMI160.readGyro(gx, gy, gz);
 
-    // Filter update (Core math)
     filter.updateIMU(
-      (gxR - gyroBiasX) / 131.0,
-      (gyR - gyroBiasY) / 131.0,
-      (gzR - gyroBiasZ) / 131.0,
-      axR / 16384.0,
-      ayR / 16384.0,
-      azR / 16384.0
+      (gx - gyroBiasX) / 131.0,
+      (gy - gyroBiasY) / 131.0,
+      (gz - gyroBiasZ) / 131.0,
+      ax / 16384.0,
+      ay / 16384.0,
+      az / 16384.0
     );
 
     roll  = filter.getRoll()  - rollOffset;
     pitch = filter.getPitch() - pitchOffset;
     yaw   = filter.getYaw()   - yawOffset;
 
-    // Output data only occasionally to avoid serial blocking
-    static int serialCounter = 0;
-    if (++serialCounter >= 40) {  // every 40 updates = 200 ms at 200 Hz
-      Serial.print(roll);
-      Serial.print(",");
-      Serial.print(pitch);
-      Serial.print(",");
-      Serial.println(yaw);
-      serialCounter = 0;
-    }
+    // 🚀 SEND EVERY 5 ms (NO COUNTER)
+    Serial.print(roll, 2);
+    Serial.print(",");
+    Serial.print(pitch, 2);
+    Serial.print(",");
+    Serial.println(yaw, 2);
   }
-
-  // Give WiFi hardware a tiny break – helps stability
-  delay(1);
 }
