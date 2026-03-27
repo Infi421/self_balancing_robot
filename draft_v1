@@ -17,11 +17,14 @@ float roll = 0, pitch = 0, yaw = 0;
 float Kp = 15.0;  
 float Kd = 0.5;   
 
-float targetPitch = 0.0; 
+float targetPitch = 180.0;  // always 180 after calibration
 float prevPitch = 0;
 
 unsigned long lastTime = 0;
 bool isCalibrated = false;
+
+// Offset
+float pitchOffset = 0;
 
 // Tracking for Serial Monitor
 int currentPwmLeft = 0;
@@ -46,6 +49,17 @@ void setup() {
 }
 
 /************************************************************
+===================== HELPER FUNCTIONS ======================
+************************************************************/
+
+// Normalize angle to 0–359
+float normalizeAngle(float angle) {
+  while (angle >= 360) angle -= 360;
+  while (angle < 0) angle += 360;
+  return angle;
+}
+
+/************************************************************
 ===================== MAIN LOOP ============================
 ************************************************************/
 void loop() {
@@ -56,40 +70,56 @@ void loop() {
     pitch = Serial.parseFloat();
     yaw   = Serial.parseFloat();
 
-
-    while (Serial.available() > 0 && (Serial.peek() == '\n' || Serial.peek() == '\r' || Serial.peek() == ' ')) {
+    // Clean buffer
+    while (Serial.available() > 0 && 
+          (Serial.peek() == '\n' || Serial.peek() == '\r' || Serial.peek() == ' ')) {
       Serial.read(); 
     }
 
-    // ===== CALIBRATION PHASE (0-10 Seconds) =====
+    /**************** CALIBRATION (0–10 sec) ****************/
     if (!isCalibrated) {
       if (millis() < 10000) {
-        // No operation, no printing, just updating the target reference
-        targetPitch = pitch;
+
+        // Continuously update offset (averaging effect)
+        pitchOffset = 180.0 - pitch;
+
         analogWrite(pwmPinL, 0);
         analogWrite(pwmPinR, 0);
         return; 
+
       } else {
         isCalibrated = true;
-        lastTime = millis();
+
+        // Apply final offset once
+        pitch = pitch + pitchOffset;
+        pitch = normalizeAngle(pitch);
+
         prevPitch = pitch;
-        // Optional: Serial.println("START"); // You can add a single start trigger here if desired
+        lastTime = millis();
       }
     }
 
-    // ===== NORMAL OPERATION (After 10 Seconds) =====
+    /**************** APPLY OFFSET ****************/
+    pitch = pitch + pitchOffset;
+    pitch = normalizeAngle(pitch);
+
+    /**************** TIMING ****************/
     unsigned long currentTime = millis();
     float dt = (currentTime - lastTime) / 1000.0; 
     lastTime = currentTime;
-    
-    if (dt <= 0.0 || dt > 0.2) dt = 0.01; 
 
-    // Raw angle difference (Error)
-    float diff = targetPitch - pitch; 
-    float pitchRate = (pitch - prevPitch) / dt; 
+    if (dt <= 0.0 || dt > 0.2) dt = 0.01;
+
+    /**************** CONTROL ****************/
+    float diff = targetPitch - pitch;
+
+    float pitchRate = (pitch - prevPitch) / dt;
     prevPitch = pitch;
 
-    // Balancing Window Check
+    // Wrap-safe correction (IMPORTANT near 0/360 boundary)
+    if (diff > 180) diff -= 360;
+    if (diff < -180) diff += 360;
+
     if (diff > -30 && diff < 30) {
       
       int pwm = 0;
@@ -117,18 +147,19 @@ void loop() {
 
       analogWrite(pwmPinL, pwm);
       analogWrite(pwmPinR, pwm);
+
       currentPwmLeft = pwm;
       currentPwmRight = pwm;
 
     } else {
-      // Emergency Cutoff
+      // Emergency cutoff
       analogWrite(pwmPinL, 0);
       analogWrite(pwmPinR, 0);
       currentPwmLeft = 0;
       currentPwmRight = 0;
     }
 
-    // ===== SERIAL MONITOR OUTPUT =====
+    /**************** DEBUG OUTPUT ****************/
     Serial.print("Pitch: "); Serial.print(pitch);
     Serial.print(" | Diff: "); Serial.print(diff);
     Serial.print(" | Dir: "); Serial.print(currentDirLeft);
