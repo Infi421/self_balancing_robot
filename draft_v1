@@ -9,12 +9,12 @@ const int pwmPinR = 6;
 const int dirPinR = 7;
 const int brakePinR = 8;
 
-const int maxPWM = 102;  // 40% cap
+const int maxPWM = 50;  // 40% cap
 
 float roll = 0, pitch = 0, yaw = 0; 
 
 // PID TUNING VALUES
-float Kp = 15.0;  
+float Kp = maxPWM/30;  
 float Kd = 0.5;   
 
 float targetPitch = 180.0;  // always 180 after calibration
@@ -120,44 +120,52 @@ void loop() {
     if (diff > 180) diff -= 360;
     if (diff < -180) diff += 360;
 
-    if (diff > -30 && diff < 30) {
-      
-      int pwm = 0;
+   if (diff > -30 && diff < 30) {
+  
+  int pwm = 0;
 
-      if (diff > 0) {
-        digitalWrite(dirPinL, HIGH);
-        digitalWrite(dirPinR, HIGH);
-        currentDirLeft = 1;
-        currentDirRight = 1;
-        
-        pwm = (Kp * diff) - (Kd * pitchRate);
-      } 
-      else if (diff < 0) {
-        digitalWrite(dirPinL, LOW);
-        digitalWrite(dirPinR, LOW);
-        currentDirLeft = 0;
-        currentDirRight = 0;
-        
-        float posDiff = -diff; 
-        pwm = (Kp * posDiff) + (Kd * pitchRate); 
-      }
+  if (diff > 0) {
+    // FORWARD
+    digitalWrite(dirPinR, HIGH);
+    digitalWrite(dirPinL, LOW);
 
-      if (pwm < 0) pwm = 0;
-      if (pwm > maxPWM) pwm = maxPWM;
+    currentDirRight = 1;
+    currentDirLeft = 0;
+    
+    pwm = (Kp * diff) - (Kd * pitchRate);
+  } 
+  else if (diff < 0) {
+    // BACKWARD
+    digitalWrite(dirPinR, LOW);
+    digitalWrite(dirPinL, HIGH);
 
-      analogWrite(pwmPinL, pwm);
-      analogWrite(pwmPinR, pwm);
+    currentDirRight = 0;
+    currentDirLeft = 1;
+    
+    float posDiff = -diff; 
+    pwm = (Kp * posDiff) + (Kd * pitchRate); 
+  }
 
-      currentPwmLeft = pwm;
-      currentPwmRight = pwm;
+  if (pwm < 0) pwm = 0;
+  if (pwm > maxPWM) pwm = maxPWM;
 
-    } else {
-      // Emergency cutoff
-      analogWrite(pwmPinL, 0);
-      analogWrite(pwmPinR, 0);
-      currentPwmLeft = 0;
-      currentPwmRight = 0;
-    }
+  analogWrite(pwmPinL, pwm);
+  analogWrite(pwmPinR, pwm);
+
+  currentPwmLeft = pwm;
+  currentPwmRight = pwm;
+
+} else {
+  // Emergency cutoff
+  digitalWrite(dirPinR, LOW);
+  digitalWrite(dirPinL, LOW);
+
+  analogWrite(pwmPinL, 0);
+  analogWrite(pwmPinR, 0);
+
+  currentPwmLeft = 0;
+  currentPwmRight = 0;
+}
 
     /**************** DEBUG OUTPUT ****************/
     Serial.print("Pitch: "); Serial.print(pitch);
