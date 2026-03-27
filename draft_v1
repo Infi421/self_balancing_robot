@@ -1,454 +1,137 @@
-#include <WiFi.h>
-#include <WebServer.h>
-#include <Wire.h>
-#include <BMI160Gen.h>
-#include <MadgwickAHRS.h>
-
 /************************************************************
-===================== WIFI / WEBSERVER ======================
+===================== PINS & VARIABLES ======================
 ************************************************************/
+const int pwmPinL = 5; 
+const int dirPinL = 4;
+const int brakePinL = 3;
 
-const char* ssid = "ESP32_Robot_Monitor";
-const char* password = "12345678";
+const int pwmPinR = 6;
+const int dirPinR = 7;
+const int brakePinR = 8;
 
-WebServer server(80);
+const int maxPWM = 102;  // 40% cap
 
-String statusLog = "System Ready";
+float roll = 0, pitch = 0, yaw = 0; 
 
+// PID TUNING VALUES
+float Kp = 15.0;  
+float Kd = 0.5;   
 
-/************************************************************
-===================== MOTOR CONTROL =========================
-Two ZS-X11H drivers
-PWM 1kHz, 45% duty max
-************************************************************/
+float targetPitch = 0.0; 
+float prevPitch = 0;
 
-// LEFT MOTOR
-const int pwmPinL = 2;
-const int dirPinL = 41;
-const int brakePinL = 42;
+unsigned long lastTime = 0;
+bool isCalibrated = false;
 
-// RIGHT MOTOR
-const int pwmPinR = 3;
-const int dirPinR = 40;
-const int brakePinR = 39;
-
-const int pwmFreq = 1000;
-const int pwmResolution = 8;
-
-const int maxPWM = 110;
-
-int lastLeftPWM = 0;
-int lastRightPWM = 0;
-
-void setMotors(float value)
-{
-  int pwm = abs(value);
-
-  if(pwm > maxPWM)
-    pwm = maxPWM;
-
-  if(pwm < 20)
-    pwm = 0;
-
-  if(value > 0)
-  {
-    digitalWrite(dirPinL, HIGH);
-    digitalWrite(dirPinR, HIGH);
-  }
-  else
-  {
-    digitalWrite(dirPinL, LOW);
-    digitalWrite(dirPinR, LOW);
-  }
-
-  ledcWrite(pwmPinL, pwm);
-  ledcWrite(pwmPinR, pwm);
-
-  lastLeftPWM = pwm;
-  lastRightPWM = pwm;
-}
-
-
-/************************************************************
-===================== IMU / GYRO ============================
-BMI160 + Madgwick
-************************************************************/
-
-Madgwick filter;
-
-#define SDA_PIN 39
-#define SCL_PIN 40
-#define IMU_ADDR 0x68
-
-float roll = 0;
-float pitch = 0;
-float yaw = 0;
-
-float rollOffset = 0;
-float pitchOffset = 0;
-float yawOffset = 0;
-
-float gyroBiasX = 0;
-float gyroBiasY = 0;
-float gyroBiasZ = 0;
-
-void calibrateGyro()
-{
-  Serial.println("Calibrating gyro");
-
-  long gx=0,gy=0,gz=0;
-
-  for(int i=0;i<2000;i++)
-  {
-    int x,y,z;
-    BMI160.readGyro(x,y,z);
-
-    gx+=x;
-    gy+=y;
-    gz+=z;
-
-    delay(2);
-  }
-
-  gyroBiasX = gx/2000.0;
-  gyroBiasY = gy/2000.0;
-  gyroBiasZ = gz/2000.0;
-
-  Serial.println("Gyro calibrated");
-}
-
-void calibrateOrientation()
-{
-  rollOffset  = filter.getRoll();
-  pitchOffset = filter.getPitch();
-  yawOffset   = filter.getYaw();
-
-  Serial.println("Orientation zeroed");
-}
-
-
-/************************************************************
-===================== PID BALANCE CONTROL ===================
-************************************************************/
-
-float Kp = 15;
-float Ki = 0;
-float Kd = 0.6;
-
-float integral = 0;
-float prevError = 0;
-
-
-/************************************************************
-===================== WEB DASHBOARD =========================
-************************************************************/
-
-String getHTML()
-{
-return R"rawliteral(
-
-<!DOCTYPE html>
-<html>
-
-<head>
-<meta name="viewport" content="width=device-width, initial-scale=1">
-
-<style>
-
-body{
-font-family:sans-serif;
-text-align:center;
-background:#111;
-color:#00ffcc;
-padding:20px;
-}
-
-button{
-padding:10px 20px;
-font-size:16px;
-background:#00ffcc;
-border:none;
-border-radius:6px;
-cursor:pointer;
-margin-bottom:15px;
-}
-
-.grid{
-display:grid;
-grid-template-columns:1fr 1fr;
-gap:10px;
-max-width:600px;
-margin:auto;
-}
-
-.card{
-background:#222;
-padding:15px;
-border-radius:10px;
-border:1px solid #333;
-}
-
-.val{
-font-size:1.8em;
-color:white;
-}
-
-#log{
-background:black;
-color:#0f0;
-padding:10px;
-margin-top:10px;
-}
-
-</style>
-</head>
-
-<body>
-
-<h1>Robot Dashboard</h1>
-
-<button onclick="zeroIMU()">Re-Zero Roll</button>
-
-<div class="grid">
-
-<div class="card">
-<h2>ROLL</h2>
-<span id="roll" class="val">0</span>
-</div>
-
-<div class="card">
-<h2>PITCH</h2>
-<span id="pitch" class="val">0</span>
-</div>
-
-<div class="card">
-<h2>YAW</h2>
-<span id="yaw" class="val">0</span>
-</div>
-
-<div class="card">
-<h2>LEFT MOTOR</h2>
-<span id="mL" class="val">0</span>
-</div>
-
-<div class="card">
-<h2>RIGHT MOTOR</h2>
-<span id="mR" class="val">0</span>
-</div>
-
-</div>
-
-<div id="log">Log</div>
-
-<script>
-
-function zeroIMU(){
-fetch('/zero');
-}
-
-setInterval(function(){
-
-fetch('/data')
-.then(res=>res.json())
-.then(d=>{
-
-document.getElementById('roll').innerText=d.roll;
-document.getElementById('pitch').innerText=d.pitch;
-document.getElementById('yaw').innerText=d.yaw;
-
-document.getElementById('mL').innerText=d.leftMotor;
-document.getElementById('mR').innerText=d.rightMotor;
-
-document.getElementById('log').innerText=d.log;
-
-});
-
-},200);
-
-</script>
-
-</body>
-</html>
-
-)rawliteral";
-}
-
+// Tracking for Serial Monitor
+int currentPwmLeft = 0;
+int currentPwmRight = 0;
+int currentDirLeft = 0;  
+int currentDirRight = 0;
 
 /************************************************************
 ===================== SETUP ================================
 ************************************************************/
+void setup() {
+  Serial.begin(115200);
+  Serial.setTimeout(5); 
 
-unsigned long microsPrevious;
-unsigned long microsPerReading;
+  pinMode(pwmPinL, OUTPUT); pinMode(dirPinL, OUTPUT); pinMode(brakePinL, OUTPUT);
+  pinMode(pwmPinR, OUTPUT); pinMode(dirPinR, OUTPUT); pinMode(brakePinR, OUTPUT);
 
-void setup()
-{
+  digitalWrite(brakePinL, HIGH); 
+  digitalWrite(brakePinR, HIGH);
 
-Serial.begin(115200);
-
-delay(3000);
-
-/* MOTOR INIT */
-
-pinMode(dirPinL, OUTPUT);
-pinMode(brakePinL, OUTPUT);
-
-pinMode(dirPinR, OUTPUT);
-pinMode(brakePinR, OUTPUT);
-
-digitalWrite(brakePinL, HIGH);
-digitalWrite(brakePinR, HIGH);
-
-ledcAttach(pwmPinL, pwmFreq, pwmResolution);
-ledcAttach(pwmPinR, pwmFreq, pwmResolution);
-
-
-/* WIFI */
-
-WiFi.mode(WIFI_AP);
-WiFi.softAP(ssid,password);
-
-Serial.println(WiFi.softAPIP());
-
-
-/* IMU */
-
-Wire.begin(SDA_PIN,SCL_PIN);
-
-if(!BMI160.begin(BMI160GenClass::I2C_MODE,IMU_ADDR))
-{
-  Serial.println("IMU ERROR");
-  while(1);
+  lastTime = millis();
 }
-
-BMI160.setAccelerometerRate(100);
-BMI160.setGyroRate(100);
-
-calibrateGyro();
-
-filter.begin(100);
-
-Serial.println("IMU stabilizing");
-
-unsigned long startTime = millis();
-
-while(millis()-startTime < 5000)
-{
-  int ax,ay,az;
-  int gx,gy,gz;
-
-  BMI160.readAccelerometer(ax,ay,az);
-  BMI160.readGyro(gx,gy,gz);
-
-  filter.updateIMU(
-    (gx-gyroBiasX)/131.0,
-    (gy-gyroBiasY)/131.0,
-    (gz-gyroBiasZ)/131.0,
-    ax/16384.0,
-    ay/16384.0,
-    az/16384.0);
-
-  delay(5);
-}
-
-calibrateOrientation();
-
-
-/* WEB ROUTES */
-
-server.on("/",[](){
-server.send(200,"text/html",getHTML());
-});
-
-server.on("/zero",[](){
-calibrateOrientation();
-server.send(200,"text/plain","zeroed");
-});
-
-server.on("/data",[](){
-
-String json =
-"{\"roll\":"+String(roll,1)+
-",\"pitch\":"+String(pitch,1)+
-",\"yaw\":"+String(yaw,1)+
-",\"leftMotor\":"+String(lastLeftPWM)+
-",\"rightMotor\":"+String(lastRightPWM)+
-",\"log\":\""+statusLog+"\"}";
-
-server.send(200,"application/json",json);
-
-});
-
-server.begin();
-
-microsPerReading = 5000;
-microsPrevious = micros();
-
-}
-
 
 /************************************************************
-===================== MAIN CONTROL LOOP =====================
+===================== MAIN LOOP ============================
 ************************************************************/
-
-void loop()
-{
-
-server.handleClient();
-
-if(micros()-microsPrevious >= microsPerReading)
-{
-
-int axR,ayR,azR;
-int gxR,gyR,gzR;
-
-BMI160.readAccelerometer(axR,ayR,azR);
-BMI160.readGyro(gxR,gyR,gzR);
-
-float gx=(gxR-gyroBiasX)/131.0;
-float gy=(gyR-gyroBiasY)/131.0;
-float gz=(gzR-gyroBiasZ)/131.0;
-
-filter.updateIMU(
-gx,gy,gz,
-axR/16384.0,
-ayR/16384.0,
-azR/16384.0);
-
-roll  = filter.getRoll()  - rollOffset;
-pitch = filter.getPitch() - pitchOffset;
-yaw   = filter.getYaw()   - yawOffset;
+void loop() {
+  
+  if (Serial.available() > 0) {
+    
+    roll  = Serial.parseFloat();
+    pitch = Serial.parseFloat();
+    yaw   = Serial.parseFloat();
 
 
-/* ===== BALANCE CONTROL ===== */
+    while (Serial.available() > 0 && (Serial.peek() == '\n' || Serial.peek() == '\r' || Serial.peek() == ' ')) {
+      Serial.read(); 
+    }
 
-float error = roll;
+    // ===== CALIBRATION PHASE (0-10 Seconds) =====
+    if (!isCalibrated) {
+      if (millis() < 10000) {
+        // No operation, no printing, just updating the target reference
+        targetPitch = pitch;
+        analogWrite(pwmPinL, 0);
+        analogWrite(pwmPinR, 0);
+        return; 
+      } else {
+        isCalibrated = true;
+        lastTime = millis();
+        prevPitch = pitch;
+        // Optional: Serial.println("START"); // You can add a single start trigger here if desired
+      }
+    }
 
-integral += error;
+    // ===== NORMAL OPERATION (After 10 Seconds) =====
+    unsigned long currentTime = millis();
+    float dt = (currentTime - lastTime) / 1000.0; 
+    lastTime = currentTime;
+    
+    if (dt <= 0.0 || dt > 0.2) dt = 0.01; 
 
-float derivative = error - prevError;
+    // Raw angle difference (Error)
+    float diff = targetPitch - pitch; 
+    float pitchRate = (pitch - prevPitch) / dt; 
+    prevPitch = pitch;
 
-float output =
-Kp * error +
-Ki * integral +
-Kd * derivative;
+    // Balancing Window Check
+    if (diff > -30 && diff < 30) {
+      
+      int pwm = 0;
 
-prevError = error;
+      if (diff > 0) {
+        digitalWrite(dirPinL, HIGH);
+        digitalWrite(dirPinR, HIGH);
+        currentDirLeft = 1;
+        currentDirRight = 1;
+        
+        pwm = (Kp * diff) - (Kd * pitchRate);
+      } 
+      else if (diff < 0) {
+        digitalWrite(dirPinL, LOW);
+        digitalWrite(dirPinR, LOW);
+        currentDirLeft = 0;
+        currentDirRight = 0;
+        
+        float posDiff = -diff; 
+        pwm = (Kp * posDiff) + (Kd * pitchRate); 
+      }
 
+      if (pwm < 0) pwm = 0;
+      if (pwm > maxPWM) pwm = maxPWM;
 
-/* ===== SAFETY ===== */
+      analogWrite(pwmPinL, pwm);
+      analogWrite(pwmPinR, pwm);
+      currentPwmLeft = pwm;
+      currentPwmRight = pwm;
 
-if(abs(roll) > 35)
-{
-  setMotors(0);
-}
-else
-{
-  setMotors(output);
-}
+    } else {
+      // Emergency Cutoff
+      analogWrite(pwmPinL, 0);
+      analogWrite(pwmPinR, 0);
+      currentPwmLeft = 0;
+      currentPwmRight = 0;
+    }
 
-microsPrevious += microsPerReading;
-
-}
-
+    // ===== SERIAL MONITOR OUTPUT =====
+    Serial.print("Pitch: "); Serial.print(pitch);
+    Serial.print(" | Diff: "); Serial.print(diff);
+    Serial.print(" | Dir: "); Serial.print(currentDirLeft);
+    Serial.print(" | PWM: "); Serial.println(currentPwmLeft);
+  }
 }
