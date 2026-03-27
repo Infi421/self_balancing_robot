@@ -148,3 +148,187 @@ void loop() {
     Serial.println(yaw, 2);
   }
 }
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+// 360 deg
+
+#include <WiFi.h>
+#include <WebServer.h>
+#include <Wire.h>
+#include <BMI160Gen.h>
+#include <MadgwickAHRS.h>
+
+/**************** WIFI ****************/
+const char* ssid = "ESP32_Robot_Monitor";
+const char* password = "12345678";
+
+WebServer server(80);
+String statusLog = "System Ready";
+
+/**************** IMU ****************/
+Madgwick filter;
+
+#define SDA_PIN 25
+#define SCL_PIN 26
+#define IMU_ADDR 0x68
+
+float roll = 0, pitch = 0, yaw = 0;
+float rollOffset = 0, pitchOffset = 0, yawOffset = 0;
+float gyroBiasX = 0, gyroBiasY = 0, gyroBiasZ = 0;
+
+bool imu_ok = false;
+
+/**************** TIMING ****************/
+unsigned long microsPrevious = 0;
+const unsigned long microsPerReading = 5000; // 5 ms = 200 Hz
+
+/**************** CALIBRATION ****************/
+void calibrateGyro() {
+  statusLog = "Calibrating gyro...";
+  long gx=0, gy=0, gz=0;
+
+  for(int i=0; i<1000; i++) {
+    int x,y,z;
+    BMI160.readGyro(x,y,z);
+    gx+=x; gy+=y; gz+=z;
+    delay(2);
+  }
+
+  gyroBiasX = gx/1000.0;
+  gyroBiasY = gy/1000.0;
+  gyroBiasZ = gz/1000.0;
+}
+
+void calibrateOrientation() {
+  if(!imu_ok) return;
+
+  rollOffset  = filter.getRoll();
+  pitchOffset = filter.getPitch();
+  yawOffset   = filter.getYaw();
+
+  statusLog = "System Ready (Zeroed)";
+}
+
+
+
+/**************** WEB ****************/
+String getHTML() {
+return R"rawliteral(
+<!DOCTYPE html><html><body style="background:#111;color:#0f0;text-align:center;">
+<h2>Robot Dashboard</h2>
+<p>Roll: <span id="r">0</span></p>
+<p>Pitch: <span id="p">0</span></p>
+<p>Yaw: <span id="y">0</span></p>
+<script>
+setInterval(()=>{
+fetch('/data').then(r=>r.json()).then(d=>{
+r.innerText=d.roll;
+p.innerText=d.pitch;
+y.innerText=d.yaw;
+});
+},100);
+</script>
+</body></html>
+)rawliteral";
+}
+
+/**************** SETUP ****************/
+void setup() {
+  Serial.begin(115200);
+
+  WiFi.mode(WIFI_AP);
+  WiFi.softAP(ssid, password);
+
+  server.on("/", [](){ server.send(200,"text/html",getHTML()); });
+  server.on("/data", [](){
+    char json[100];
+    snprintf(json,sizeof(json),
+      "{\"roll\":%.2f,\"pitch\":%.2f,\"yaw\":%.2f}",
+      roll,pitch,yaw);
+    server.send(200,"application/json",json);
+  });
+  server.begin();
+
+  Wire.begin(SDA_PIN, SCL_PIN);
+  Wire.setClock(400000);
+
+  if (BMI160.begin(BMI160GenClass::I2C_MODE, IMU_ADDR)) {
+    imu_ok = true;
+
+    BMI160.setAccelerometerRate(100);
+    BMI160.setGyroRate(100);
+
+    calibrateGyro();
+    filter.begin(200);   // match loop rate
+
+    delay(2000);         // stabilize
+    calibrateOrientation();
+  }
+
+  microsPrevious = micros();
+}
+
+float wrap360(float angle) {
+  while (angle < 0) angle += 360;
+  while (angle >= 360) angle -= 360;
+  return angle;
+}
+
+/**************** LOOP ****************/
+void loop() {
+
+  // always handle web
+  server.handleClient();
+
+  // precise 200 Hz loop
+  if (imu_ok && (micros() - microsPrevious >= microsPerReading)) {
+
+    microsPrevious += microsPerReading;
+
+    int ax, ay, az, gx, gy, gz;
+    BMI160.readAccelerometer(ax, ay, az);
+    BMI160.readGyro(gx, gy, gz);
+
+    filter.updateIMU(
+      (gx - gyroBiasX) / 131.0,
+      (gy - gyroBiasY) / 131.0,
+      (gz - gyroBiasZ) / 131.0,
+      ax / 16384.0,
+      ay / 16384.0,
+      az / 16384.0
+    );
+
+    // roll  = filter.getRoll()  - rollOffset;
+    // pitch = filter.getPitch() - pitchOffset;
+    // yaw   = filter.getYaw()   - yawOffset;
+
+    roll  = wrap360(filter.getRoll()  - rollOffset);
+    pitch = wrap360(filter.getPitch() - pitchOffset);
+    yaw   = wrap360(filter.getYaw()   - yawOffset);
+
+    // 🚀 SEND EVERY 5 ms (NO COUNTER)
+    Serial.print(roll, 2);
+    Serial.print(",");
+    Serial.print(pitch, 2);
+    Serial.print(",");
+    Serial.println(yaw, 2);
+  }
+}
