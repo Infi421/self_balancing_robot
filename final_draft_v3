@@ -32,7 +32,7 @@ const int dirPinL = 14;
 const int pwmPinR = 33;
 const int dirPinR = 32;
 
-const int maxPWM = 30;
+const int maxPWM = 50;
 
 /******** STATE ********/
 volatile float pitch = 0;
