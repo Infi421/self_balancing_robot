@@ -39,7 +39,7 @@ volatile float pitch = 0;
 volatile float diffVal = 0;
 
 volatile int pwmL = 0, pwmR = 0;
-volatile int dirL = 0, dirR = 0;
+volatile int dirL = 1, dirR = 0;
 
 String dirL_str = "S";
 String dirR_str = "S";
@@ -54,7 +54,9 @@ float Kd = 0.6;
 /******** FILTER ********/
 float ax_f=0, ay_f=0, az_f=0;
 float gx_f=0, gy_f=0, gz_f=0;
-float alpha = 0.15f;
+float alpha_acc = 0.3f;
+float alpha_gyro = 0.7f;
+
 
 /******** GYRO ********/
 float gyroBiasX=0, gyroBiasY=0, gyroBiasZ=0;
@@ -190,7 +192,7 @@ server.on("/calibrate",[](){
   // 🔴 1. STOP MOTORS IMMEDIATELY
   pwmL = 0;
   pwmR = 0;
-  digitalWrite(dirPinL, LOW);
+  digitalWrite(dirPinL, HIGH);
   digitalWrite(dirPinR, LOW);
   analogWrite(pwmPinL, 0);
   analogWrite(pwmPinR, 0);
@@ -260,20 +262,19 @@ void controlTask(void *pv){
       float gy=(gyRaw * GYRO_SCALE) - gyroBiasY;
       float gz=(gzRaw * GYRO_SCALE) - gyroBiasZ;
 
-      ax_f = alpha*ax + (1-alpha)*ax_f;
-      ay_f = alpha*ay + (1-alpha)*ay_f;
-      az_f = alpha*az + (1-alpha)*az_f;
+      ax_f = alpha_acc*ax + (1-alpha_acc)*ax_f; 
+      ay_f = alpha_acc*ay + (1-alpha_acc)*ay_f;
+      az_f = alpha_acc*az + (1-alpha_acc)*az_f;
 
-      gx_f = alpha*gx + (1-alpha)*gx_f;
-      gy_f = alpha*gy + (1-alpha)*gy_f;
-      gz_f = alpha*gz + (1-alpha)*gz_f;
+      gx_f = alpha_gyro*gx + (1-alpha_gyro)*gx_f;
+      gy_f = alpha_gyro*gy + (1-alpha_gyro)*gy_f;
+      gz_f = alpha_gyro*gz + (1-alpha_gyro)*gz_f;
 
       filter.updateIMU(gx_f,gy_f,gz_f,ax_f,ay_f,az_f);
 
       pitch = filter.getPitch() - pitchZero;
       if(isnan(pitch)) pitch=0;
 
-      pitchRate = gy_f;
       pitchRate = -gy_f;
 
       pitchRate = constrain(pitchRate, -150, 150);
@@ -289,7 +290,7 @@ void controlTask(void *pv){
       */
 
       // ===== NEW CORRECT PD CONTROL =====
-      float error = pitch;
+      float error = -pitch;
       float output = (Kp * error) + (Kd * pitchRate);
 
       int pwm = 0;
@@ -311,7 +312,7 @@ void controlTask(void *pv){
         pwm = constrain(pwm, 0, maxPWM);
 
       } else {
-        dirL = 0;
+        dirL = 1;
         dirR = 0;
         pwm = 0;
 
