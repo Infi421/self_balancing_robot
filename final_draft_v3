@@ -32,7 +32,7 @@ const int dirPinL = 14;
 const int pwmPinR = 33;
 const int dirPinR = 32;
 
-const int maxPWM = 50;
+const int maxPWM = 45;
 
 /******** STATE ********/
 volatile float pitch = 0;
@@ -314,6 +314,12 @@ void controlTask(void *pv){
         dirL = 0;
         dirR = 0;
         pwm = 0;
+
+        pwmL = 0;
+        pwmR = 0;
+
+        analogWrite(pwmPinL, 0);
+        analogWrite(pwmPinR, 0);
       }
 
       pwmL = pwm;
